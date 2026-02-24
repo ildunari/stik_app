@@ -19,8 +19,24 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 use windows::{show_command_palette, show_postit_with_folder, show_settings};
 
+fn capture_folder_for_reopen(app: &tauri::AppHandle) -> String {
+    let state = app.state::<AppState>();
+    let shortcut_map = state
+        .shortcut_to_folder
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(folder) = shortcut_map.get("Cmd+Shift+S") {
+        return folder.clone();
+    }
+    drop(shortcut_map);
+
+    settings::get_settings()
+        .map(|s| s.default_folder)
+        .unwrap_or_else(|_| "Inbox".to_string())
+}
+
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(AppState::new())
         .manage(NoteIndex::new())
         .manage(EmbeddingIndex::new())
@@ -237,9 +253,23 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
             eprintln!("Fatal: Tauri application failed to start: {}", e);
             std::process::exit(1);
         });
+
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } = event
+        {
+            if !has_visible_windows {
+                let folder = capture_folder_for_reopen(app_handle);
+                show_postit_with_folder(app_handle, &folder);
+            }
+        }
+    });
 }
